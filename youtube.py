@@ -6,8 +6,8 @@ import requests
 import logging # Added for robust logging
 import time # Added for implementing delays
 from urllib.parse import urlparse
-#from faster_whisper import WhisperModel # Import faster-whisper
-#from streamlit_extras.add_vertical_space import add_vertical_space
+from faster_whisper import WhisperModel # Import faster-whisper
+from streamlit_extras.add_vertical_space import add_vertical_space
 from sentence_transformers import SentenceTransformer # For RAG-style embedding
 from sklearn.metrics.pairwise import cosine_similarity # For RAG retrieval
 
@@ -753,6 +753,7 @@ if st.button("✨ Make My Notes!"):
 
         # Advance the global key index for the *next* fresh "Make My Notes!" session.
         # This ensures that even if this session sticks to one key, the next overall app use tries a different starting key.
+        st.session_state.last_used_session_api_key = session_api_key # Store for potential Q&A use
         CURRENT_API_KEY_INDEX = (CURRENT_API_KEY_INDEX + 1) % len(AVAILABLE_GROQ_API_KEYS) # Advance for next time
 
         update_progress_with_timer(10, "⬇️ Downloading audio from YouTube...")
@@ -791,6 +792,7 @@ if st.button("✨ Make My Notes!"):
                             original_failed_key_index = AVAILABLE_GROQ_API_KEYS.index(session_api_key) # Find index of the failed key
                             new_key_for_session = get_new_session_key_on_401(original_failed_key_index)
                             if new_key_for_session:
+                                st.session_state.last_used_session_api_key = new_key_for_session # Update stored key
                                 session_api_key = new_key_for_session # Switch key for the rest of the session
                                 chunk_summary = summarize_transcript_chunk_with_groq(session_api_key, chunk, i + 1, num_chunks) # Retry the first chunk with new key
                             # If new_key_for_session is None, all keys failed, error will propagate
@@ -848,9 +850,9 @@ if st.session_state.rag_chunks: # Only show Q&A if RAG data is ready
             if relevant_chunks:
                 # For Q&A, we should also use the session_api_key if available from a successful run
                 # However, session_api_key is local to the button click.
-                # A more robust way would be to store the last successful key in st.session_state
-                if 'session_api_key' in st.session_state and st.session_state.session_api_key:
-                    qna_api_key = st.session_state.session_api_key
+                # Use the last successfully determined API key from the main process
+                if 'last_used_session_api_key' in st.session_state and st.session_state.last_used_session_api_key:
+                    qna_api_key = st.session_state.last_used_session_api_key
                 else: # Fallback if no session key was stored (e.g. main process failed before setting it)
                     qna_api_key = get_initial_groq_api_key() 
                 
