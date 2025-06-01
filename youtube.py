@@ -13,6 +13,13 @@ from sklearn.metrics.pairwise import cosine_similarity # For RAG retrieval
 
 # --- Configuration ---
 
+# --- FFMPEG Configuration ---
+FFMPEG_PATH = os.environ.get("FFMPEG_PATH") # Set this environment variable if you need to specify ffmpeg location
+if FFMPEG_PATH:
+    logging.info(f"Using FFMPEG_PATH from environment: {FFMPEG_PATH}")
+else:
+    logging.info("FFMPEG_PATH environment variable not set. yt-dlp will attempt to find ffmpeg in system PATH.")
+
 # --- Logging Configuration ---
 # Configure logging to output informational messages and above.
 # For debugging, you can change level to logging.DEBUG
@@ -116,18 +123,22 @@ class TempAudioFile:
 def download_youtube_audio(url):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
         output_path = tmp_file.name
-    cmd = [
-        "yt-dlp",
-        # "--ffmpeg-location", FFMPEG_PATH,  # Commented out: yt-dlp should find ffmpeg in PATH
+    
+    cmd_base = ["yt-dlp"]
+    if FFMPEG_PATH:
+        cmd_base.extend(["--ffmpeg-location", FFMPEG_PATH])
+    
+    cmd_args = [
         "-x",  # Extract audio
         "--audio-format", "mp3",
         "--audio-quality", "0", # Best audio quality for MP3 conversion
         "-o", output_path,
         "--no-continue",      # Do not resume partially downloaded files (forces re-check of post-processing)
         "--force-overwrites", # Overwrite existing files, including during post-processing
-        "-vU",                # Verbose output for debugging yt-dlp
+        "--verbose",          # General verbose output for yt-dlp, including post-processing
         url
     ]
+    cmd = cmd_base + cmd_args
     try:
         logging.info(f"Executing yt-dlp command: {' '.join(cmd)}")
         result = subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8') # Specify encoding
@@ -753,7 +764,6 @@ if st.button("✨ Make My Notes!"):
 
         # Advance the global key index for the *next* fresh "Make My Notes!" session.
         # This ensures that even if this session sticks to one key, the next overall app use tries a different starting key.
-        st.session_state.last_used_session_api_key = session_api_key # Store for potential Q&A use
         CURRENT_API_KEY_INDEX = (CURRENT_API_KEY_INDEX + 1) % len(AVAILABLE_GROQ_API_KEYS) # Advance for next time
 
         update_progress_with_timer(10, "⬇️ Downloading audio from YouTube...")
@@ -792,7 +802,6 @@ if st.button("✨ Make My Notes!"):
                             original_failed_key_index = AVAILABLE_GROQ_API_KEYS.index(session_api_key) # Find index of the failed key
                             new_key_for_session = get_new_session_key_on_401(original_failed_key_index)
                             if new_key_for_session:
-                                st.session_state.last_used_session_api_key = new_key_for_session # Update stored key
                                 session_api_key = new_key_for_session # Switch key for the rest of the session
                                 chunk_summary = summarize_transcript_chunk_with_groq(session_api_key, chunk, i + 1, num_chunks) # Retry the first chunk with new key
                             # If new_key_for_session is None, all keys failed, error will propagate
@@ -850,9 +859,9 @@ if st.session_state.rag_chunks: # Only show Q&A if RAG data is ready
             if relevant_chunks:
                 # For Q&A, we should also use the session_api_key if available from a successful run
                 # However, session_api_key is local to the button click.
-                # Use the last successfully determined API key from the main process
-                if 'last_used_session_api_key' in st.session_state and st.session_state.last_used_session_api_key:
-                    qna_api_key = st.session_state.last_used_session_api_key
+                # A more robust way would be to store the last successful key in st.session_state
+                if 'session_api_key' in st.session_state and st.session_state.session_api_key:
+                    qna_api_key = st.session_state.session_api_key
                 else: # Fallback if no session key was stored (e.g. main process failed before setting it)
                     qna_api_key = get_initial_groq_api_key() 
                 
