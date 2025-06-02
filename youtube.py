@@ -13,13 +13,6 @@ from sklearn.metrics.pairwise import cosine_similarity # For RAG retrieval
 
 # --- Configuration ---
 
-# --- FFMPEG Configuration ---
-FFMPEG_PATH = os.environ.get("FFMPEG_PATH") # Set this environment variable if you need to specify ffmpeg location
-if FFMPEG_PATH:
-    logging.info(f"Using FFMPEG_PATH from environment: {FFMPEG_PATH}")
-else:
-    logging.info("FFMPEG_PATH environment variable not set. yt-dlp will attempt to find ffmpeg in system PATH.")
-
 # --- Logging Configuration ---
 # Configure logging to output informational messages and above.
 # For debugging, you can change level to logging.DEBUG
@@ -49,6 +42,49 @@ WHISPER_COMPUTE_TYPE = "int8" # Good for CPU; other options: "int16", "float32"
 # For GPU (NVIDIA with CUDA):
 # WHISPER_DEVICE = "cuda"
 # WHISPER_COMPUTE_TYPE = "float16" # Good for GPU; other options: "int8_float16", "float32"
+
+# --- FFmpeg Configuration ---
+# Path to the ffmpeg executable.
+# How to configure:
+# 1. HIGHEST PRIORITY: Set the FFMPEG_PATH environment variable to the full path of your ffmpeg executable.
+#    Example: FFMPEG_PATH=/usr/local/bin/ffmpeg or FFMPEG_PATH=C:\ffmpeg\bin\ffmpeg.exe
+# 2. NEXT PRIORITY: Place the ffmpeg distribution folder (e.g., "ffmpeg-7.1.1")
+#    in the same directory as this script. The script will try to auto-detect it.
+#    The expected structure is:
+#    your_script_directory/
+#    ├── youtube.py (this script)
+#    └── ffmpeg-7.1.1/
+#        └── bin/
+#            └── ffmpeg (or ffmpeg.exe on Windows)
+# 3. LOWEST PRIORITY (Fallback): If neither of the above is found, yt-dlp will attempt
+#    to find ffmpeg in the system PATH (this is the default yt-dlp behavior).
+
+FFMPEG_ENV_VAR = "FFMPEG_PATH"
+FFMPEG_RELATIVE_DIR_NAME = "ffmpeg-7.1.1"  # Name of the directory containing ffmpeg (e.g., ffmpeg-X.Y.Z)
+FFMPEG_EXECUTABLE_NAME = "ffmpeg.exe" if os.name == 'nt' else "ffmpeg"
+FFMPEG_PATH_TO_USE = None
+
+ffmpeg_path_from_env = os.environ.get(FFMPEG_ENV_VAR)
+if ffmpeg_path_from_env:
+    if os.path.isfile(ffmpeg_path_from_env):
+        FFMPEG_PATH_TO_USE = ffmpeg_path_from_env
+        logging.info(f"Using ffmpeg from environment variable {FFMPEG_ENV_VAR}: {FFMPEG_PATH_TO_USE}")
+    else:
+        logging.warning(f"Environment variable {FFMPEG_ENV_VAR} is set to '{ffmpeg_path_from_env}', but it's not a valid file. Will check relative path next.")
+
+if not FFMPEG_PATH_TO_USE:
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        relative_ffmpeg_path = os.path.join(script_dir, FFMPEG_RELATIVE_DIR_NAME, "bin", FFMPEG_EXECUTABLE_NAME)
+        if os.path.isfile(relative_ffmpeg_path):
+            FFMPEG_PATH_TO_USE = relative_ffmpeg_path
+            logging.info(f"Using ffmpeg from relative path: {FFMPEG_PATH_TO_USE}")
+        else:
+            logging.info(f"ffmpeg not found at relative path: {relative_ffmpeg_path}. yt-dlp will try to find ffmpeg in the system PATH.")
+    except NameError: # __file__ might not be defined in all execution contexts
+        logging.info("Could not determine script directory to check for relative ffmpeg path. yt-dlp will try to find ffmpeg in the system PATH if FFMPEG_PATH env var is not set/valid.")
+    except Exception as e:
+        logging.warning(f"Error when trying to determine relative ffmpeg path: {e}. yt-dlp will try to find ffmpeg in the system PATH if FFMPEG_PATH env var is not set/valid.")
 
 # --- API Key Management ---
 AVAILABLE_GROQ_API_KEYS = []
@@ -113,32 +149,40 @@ class TempAudioFile:
         if self.path and os.path.exists(self.path):
             try:
                 os.remove(self.path)
+                logging.info(f"Successfully cleaned up temporary audio file: {self.path}")
             except Exception as e:
                 logging.warning(f"Could not clean up temporary audio file: {self.path}. Error: {e}")
                 # Keep user-facing warning if appropriate, or handle silently if preferred
                 # For now, let's keep it to inform the user of potential leftover files.
                 st.warning(f"Note: Could not automatically clean up a temporary audio file: {os.path.basename(self.path)}. You may need to delete it manually if it persists. Error: {e}")
+        elif self.path: # Path was provided but file doesn't exist (e.g., yt-dlp failed to create it or already cleaned)
+            logging.info(f"Temporary audio file {self.path} did not exist at cleanup time (or was already removed).")
+        # If self.path is None or empty, nothing to do.
+
 
 
 def download_youtube_audio(url):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
         output_path = tmp_file.name
-    
+
     cmd_base = ["yt-dlp"]
-    if FFMPEG_PATH:
-        cmd_base.extend(["--ffmpeg-location", FFMPEG_PATH])
-    
-    cmd_args = [
+    if FFMPEG_PATH_TO_USE:
+        cmd_base.extend(["--ffmpeg-location", FFMPEG_PATH_TO_USE])
+        logging.info(f"yt-dlp will use ffmpeg from: {FFMPEG_PATH_TO_USE}")
+    else:
+        logging.info("No specific ffmpeg path configured; yt-dlp will search for ffmpeg (e.g., in system PATH).")
+
+    cmd_base.extend([
         "-x",  # Extract audio
         "--audio-format", "mp3",
         "--audio-quality", "0", # Best audio quality for MP3 conversion
         "-o", output_path,
         "--no-continue",      # Do not resume partially downloaded files (forces re-check of post-processing)
         "--force-overwrites", # Overwrite existing files, including during post-processing
-        "--verbose",          # General verbose output for yt-dlp, including post-processing
+        "-vU",                # Verbose output for debugging yt-dlp
         url
-    ]
-    cmd = cmd_base + cmd_args
+    ])
+    cmd = cmd_base
     try:
         logging.info(f"Executing yt-dlp command: {' '.join(cmd)}")
         result = subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8') # Specify encoding
@@ -764,6 +808,7 @@ if st.button("✨ Make My Notes!"):
 
         # Advance the global key index for the *next* fresh "Make My Notes!" session.
         # This ensures that even if this session sticks to one key, the next overall app use tries a different starting key.
+        st.session_state.last_used_session_api_key = session_api_key # Store for potential Q&A use
         CURRENT_API_KEY_INDEX = (CURRENT_API_KEY_INDEX + 1) % len(AVAILABLE_GROQ_API_KEYS) # Advance for next time
 
         update_progress_with_timer(10, "⬇️ Downloading audio from YouTube...")
@@ -802,6 +847,7 @@ if st.button("✨ Make My Notes!"):
                             original_failed_key_index = AVAILABLE_GROQ_API_KEYS.index(session_api_key) # Find index of the failed key
                             new_key_for_session = get_new_session_key_on_401(original_failed_key_index)
                             if new_key_for_session:
+                                st.session_state.last_used_session_api_key = new_key_for_session # Update stored key
                                 session_api_key = new_key_for_session # Switch key for the rest of the session
                                 chunk_summary = summarize_transcript_chunk_with_groq(session_api_key, chunk, i + 1, num_chunks) # Retry the first chunk with new key
                             # If new_key_for_session is None, all keys failed, error will propagate
@@ -859,9 +905,9 @@ if st.session_state.rag_chunks: # Only show Q&A if RAG data is ready
             if relevant_chunks:
                 # For Q&A, we should also use the session_api_key if available from a successful run
                 # However, session_api_key is local to the button click.
-                # A more robust way would be to store the last successful key in st.session_state
-                if 'session_api_key' in st.session_state and st.session_state.session_api_key:
-                    qna_api_key = st.session_state.session_api_key
+                # Use the last successfully determined API key from the main process
+                if 'last_used_session_api_key' in st.session_state and st.session_state.last_used_session_api_key:
+                    qna_api_key = st.session_state.last_used_session_api_key
                 else: # Fallback if no session key was stored (e.g. main process failed before setting it)
                     qna_api_key = get_initial_groq_api_key() 
                 
