@@ -155,17 +155,41 @@ def download_youtube_audio(url):
         raise RuntimeError(error_message) from None
     except subprocess.CalledProcessError as e:
         error_message = f"yt-dlp failed with exit code {e.returncode}.\n"
-        error_message += f"Command: {' '.join(e.cmd)}\n"
-        error_message += f"Stdout:\n{e.stdout}\n"
-        error_message += f"Stderr:\n{e.stderr}"
+        error_message += f"Command: {' '.join(e.cmd)}\n\n"
+        
+        stdout_content = e.stdout.strip() if e.stdout else "(empty)"
+        stderr_content = e.stderr.strip() if e.stderr else "(empty)"
+
+        error_message += f"Stdout:\n{stdout_content}\n\n"
+        error_message += f"Stderr:\n{stderr_content}\n"
+
+        additional_guidance = (
+            "\n[Troubleshooting Tips for yt-dlp errors]\n"
+            "1. FFmpeg Requirement: Audio extraction (e.g., to MP3) requires a working FFmpeg installation.\n"
+            "   - Ensure FFmpeg is installed and accessible in your system's PATH.\n"
+            "   - Alternatively, configure its location via the FFMPEG_PATH environment variable or by placing it in a 'ffmpeg-X.Y.Z/bin' directory relative to this script (the script logs which path it attempts to use, see FFMPEG_PATH_TO_USE).\n"
+            "   - If FFmpeg is missing or misconfigured, yt-dlp may fail during audio processing, often after initial downloads. Check 'Stderr' above for FFmpeg-related messages.\n"
+            "2. yt-dlp Version & Installation: The version of yt-dlp can be critical.\n"
+            "   - The log shows yt-dlp version information (see 'Stdout' above). Your log indicates 'stable@2025.05.22', which is highly unusual and likely problematic.\n"
+            "   - Consider reinstalling/updating to an official stable release: `pip uninstall yt-dlp` then `pip install yt-dlp`, or `yt-dlp -U` if your current installation method supports it. The latest official versions are typically dated for the current year (e.g., 2023.xx.xx or 2024.xx.xx).\n"
+            "3. Video Accessibility & URL: \n"
+            "   - Double-check the YouTube URL for correctness.\n"
+            "   - The video must be publicly accessible or available under conditions yt-dlp can handle.\n"
+            "4. Network Stability: Ensure a stable internet connection, as interruptions can cause download failures.\n"
+            "5. Review Stderr: The 'Stderr' output from yt-dlp (printed above, if any) is often the most critical piece of information, as it may contain specific error messages from yt-dlp or FFmpeg.\n"
+            "6. Test yt-dlp Manually: Try running the failing command (shown in the error message) directly in your terminal. This can sometimes provide more immediate feedback or different error messages."
+        )
+        error_message += additional_guidance
+        
         logging.error(f"yt-dlp execution failed. Exit code: {e.returncode}")
         logging.error(f"Command: {' '.join(e.cmd)}")
-        if e.stdout: logging.error(f"yt-dlp stdout:\n{e.stdout}")
-        if e.stderr: logging.error(f"yt-dlp stderr:\n{e.stderr}")
+        if e.stdout: logging.error(f"yt-dlp stdout:\n{stdout_content}")
+        if e.stderr: logging.error(f"yt-dlp stderr:\n{stderr_content}")
         # Re-raise as RuntimeError to be caught by the main error handler
         raise RuntimeError(error_message) from e
 
     return output_path
+
 
 def transcribe_with_local_whisper(audio_path, model_size=DEFAULT_WHISPER_MODEL_SIZE):
     global transcription_models
